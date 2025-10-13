@@ -1,0 +1,22 @@
+# Dependencias
+node_modules/
+
+# Archivos de entorno
+.env
+
+# Archivos de logs
+*.log
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de base de datos locales
+*.mdf
+*.ldf
+
+# Configuraciones locales de VSCode
+.vscode/
+
+# Carpeta de backups
+backup/
