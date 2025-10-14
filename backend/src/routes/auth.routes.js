@@ -9,9 +9,11 @@ router.post('/register', AuthController.register);
 // Inicio de sesión
 router.post('/login', AuthController.login);
 
-// Login alternativo por SMS
-router.post("/sms/login", AuthController.sendSMSLogin);
-router.post("/sms/verify", AuthController.verifySMSLogin);
+// Login por SMS (envía OTP)
+router.post("/login-sms", AuthController.loginSMS);
+
+// Verificación del código SMS
+router.post("/verify-sms", AuthController.verifySMS);
 
 
 export default router;
