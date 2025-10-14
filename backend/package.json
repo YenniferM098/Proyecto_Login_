@@ -6,18 +6,21 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon src/server.js",
-  "start": "node src/server.js"
+    "start": "node src/server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "base64url": "^3.0.1",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "dayjs": "^1.11.18",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
+    "express-session": "^1.18.2",
+    "fido2-lib": "^3.5.3",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "mssql": "^12.0.0",

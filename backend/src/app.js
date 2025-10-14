@@ -5,6 +5,10 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import './config/db.config.js'; 
 import authRoutes from './routes/auth.routes.js';
+import webauthnRoutes from './routes/webauthn.routes.js';
+import session from "express-session";
+import oauthRoutes from "./routes/oauth.routes.js";
+import passport from "./services/oauth.service.js";
 
 dotenv.config();
 const app = express();
@@ -21,6 +25,15 @@ app.use(cors({
   credentials: true   // ✅ Permite envío de cookies
 }));
 
+app.use(
+  session({
+    secret: "supersecretkey",
+    resave: false,
+    saveUninitialized: false,
+  })
+);
+app.use(passport.initialize());
+app.use(passport.session());
 
 
 // Límite de peticiones (protege contra ataques)
@@ -36,5 +49,7 @@ app.get('/', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/webauthn', webauthnRoutes);
+app.use("/api/oauth", oauthRoutes);
 
 export default app;
