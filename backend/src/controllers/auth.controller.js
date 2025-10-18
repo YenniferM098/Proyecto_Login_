@@ -2,16 +2,18 @@ import bcrypt from "bcryptjs";
 import { poolPromise } from "../config/db.config.js";
 import { UserModel } from "../models/user.model.js";
 import { JWTService } from "../services/jwt.service.js";
-import { TwoFAService } from "../services/twofa.service.js";
-import { TokenModel } from "../models/token.model.js";
-import { SMSService } from "../services/sms.service.js";
+import { SessionModel } from '../models/session.model.js';
+import { RefreshModel } from "../models/refresh.model.js";
+import { v4 as uuidv4 } from "uuid";
+import sql from "mssql";
 import dotenv from "dotenv";
+
 dotenv.config();
 
 export const AuthController = {
 /**
  * ================================================================
- *  MÉTODO 0️⃣ — REGISTRO DE USUARIO (valida correo y teléfono únicos)
+ *  MÉTODO 0 — REGISTRO DE USUARIO (valida correo y teléfono únicos)
  * ================================================================
  */
 register: async (req, res) => {
@@ -62,9 +64,47 @@ register: async (req, res) => {
   }
 },
 
+  /**  Verifica si un correo ya está registrado */
+  checkEmail: async (req, res) => {
+    try {
+      const { correo } = req.query;
+      if (!correo) return res.status(400).json({ error: "Correo requerido" });
+
+      const pool = await poolPromise;
+      const result = await pool
+        .request()
+        .input("correo", sql.NVarChar(100), correo)
+        .query("SELECT id_usuario FROM Usuarios WHERE correo = @correo");
+
+      res.json({ exists: result.recordset.length > 0 });
+    } catch (err) {
+      console.error("❌ Error en checkEmail:", err);
+      res.status(500).json({ error: "Error interno del servidor" });
+    }
+  },
+
+  /**  Verifica si un teléfono ya está registrado */
+  checkPhone: async (req, res) => {
+    try {
+      const { telefono } = req.query;
+      if (!telefono) return res.status(400).json({ error: "Teléfono requerido" });
+
+      const pool = await poolPromise;
+      const result = await pool
+        .request()
+        .input("telefono", sql.NVarChar(20), telefono)
+        .query("SELECT id_usuario FROM Usuarios WHERE telefono = @telefono");
+
+      res.json({ exists: result.recordset.length > 0 });
+    } catch (err) {
+      console.error("❌ Error en checkPhone:", err);
+      res.status(500).json({ error: "Error interno del servidor" });
+    }
+  },
+
   /**
    * ================================================================
-   *  MÉTODO 1️⃣ — LOGIN NORMAL (CONTRASEÑA + TOKEN INTERNO JWT)
+   *  MÉTODO 1️ — LOGIN NORMAL (CONTRASEÑA + TOKEN INTERNO JWT + REFRESH TOKEN)
    * ================================================================
    */
   login: async (req, res) => {
@@ -77,28 +117,29 @@ register: async (req, res) => {
 
       const user = await UserModel.findByEmail(pool, correo);
       if (!user)
-        return res.status(401).json({ error: "Correo o contraseña inválidos" });
+        return res.status(401).json({ error: "Correo incorrecto" });
 
       const validPassword = await bcrypt.compare(contrasena, user.contrasena);
       if (!validPassword)
-        return res.status(401).json({ error: "Correo o contraseña inválidos" });
+        return res.status(401).json({ error: "Contraseña incorrecta" });
 
-      // Generar JWT
-      const token = JWTService.generateToken({
-        id: user.id_usuario,
-        correo: user.correo,
-      });
+      // ✅ Generar access token JWT
+      const accessToken = JWTService.generateToken(
+        { id: user.id_usuario, correo: user.correo },
+        "15m" // duración corta
+      );
 
-      // Generar token 2FA temporal
-      const otp = TwoFAService.generateOTP();
-      const otpHash = await bcrypt.hash(otp, 10);
-      const fechaExp = new Date(Date.now() + 60 * 1000);
-      await TokenModel.save(pool, user.id_usuario, otpHash, "2FA", fechaExp);
+      // ✅ Generar refresh token (UUID aleatorio)
+      const refreshToken = uuidv4();
+      await RefreshModel.save(pool, user.id_usuario, refreshToken, 7); // 7 días
+
+      // ✅ Guardar sesión en SesionesJWT
+      await SessionModel.save(pool, user.id_usuario, accessToken, req.ip);
 
       res.status(200).json({
         message: "Inicio de sesión exitoso",
-        token,
-        otp,
+        accessToken,
+        refreshToken,
         user: {
           id: user.id_usuario,
           nombre: user.nombre,
@@ -112,118 +153,100 @@ register: async (req, res) => {
   },
 
   /**
- * ================================================================
- *  MÉTODO 2️⃣ — AUTENTICACIÓN POR SMS (OTP REAL CON PREFIJO +52)
- * ================================================================
- * - Verifica si el número existe en la BD
- * - Genera un código OTP de 6 dígitos
- * - Cifra y guarda en la tabla Tokens2FA
- * - Envía el SMS real usando Textbelt
- * ================================================================
- */
-loginSMS: async (req, res) => {
-  try {
-    const pool = await poolPromise;
-    const { telefono } = req.body;
-
-    if (!telefono)
-      return res.status(400).json({ error: "Falta el número de teléfono" });
-
-    // 🔹 Verificar existencia del usuario por número
-    const result = await pool.request()
-      .input("telefono", telefono)
-      .query("SELECT * FROM Usuarios WHERE telefono = @telefono");
-
-    if (!result.recordset.length)
-      return res.status(404).json({ error: "Teléfono no registrado" });
-
-    const user = result.recordset[0];
-
-    // 🔹 Generar OTP de 6 dígitos
-    const otp = Math.floor(100000 + Math.random() * 900000);
-
-    // 🔹 Cifrar y guardar en Tokens2FA
-    const otpHash = await bcrypt.hash(String(otp), 10);
-    const fechaExp = new Date(Date.now() + 60 * 1000); // Expira en 1 min
-
-    await TokenModel.save(pool, user.id_usuario, otpHash, "SMS", fechaExp);
-
-    // 🔹 Agregar prefijo automático (+52)
-    let telefonoFormateado = user.telefono;
-    if (!telefonoFormateado.startsWith("+")) {
-      telefonoFormateado = "+52" + telefonoFormateado;
-    }
-
-    // 🔹 Enviar SMS real con Textbelt
-    await SMSService.sendSMS(
-      telefonoFormateado,
-      `Tu código de acceso es: ${otp}`
-    );
-
-    res.status(200).json({
-      message: "Código OTP enviado correctamente por SMS",
-      telefono: telefonoFormateado,
-    });
-  } catch (err) {
-    console.error("❌ Error en loginSMS:", err);
-    res.status(500).json({ error: "Error al enviar SMS" });
-  }
-},
-
-
-  /**
    * ================================================================
-   *  MÉTODO 3️⃣ — VERIFICAR CÓDIGO OTP DEL SMS
+   * REFRESH TOKEN — ROTACIÓN DE TOKENS
    * ================================================================
    */
-  verifySMS: async (req, res) => {
+  refreshToken: async (req, res) => {
     try {
       const pool = await poolPromise;
-      const { telefono, otp } = req.body;
+      const { id_usuario, refreshToken } = req.body;
 
-      if (!telefono || !otp)
+      if (!id_usuario || !refreshToken)
         return res.status(400).json({ error: "Faltan datos" });
 
-      const result = await pool.request()
-        .input("telefono", telefono)
-        .query("SELECT * FROM Usuarios WHERE telefono = @telefono");
-
-      if (!result.recordset.length)
-        return res.status(404).json({ error: "Teléfono no registrado" });
-
-      const user = result.recordset[0];
-
-      const tokenData = await TokenModel.findLatest(pool, user.id_usuario);
-      if (!tokenData)
-        return res.status(404).json({ error: "No hay código activo" });
-
-      const valid = await bcrypt.compare(String(otp), tokenData.codigo_otp);
+      const valid = await RefreshModel.validate(pool, id_usuario, refreshToken);
       if (!valid)
-        return res.status(401).json({ error: "Código incorrecto o expirado" });
+        return res.status(401).json({ error: "Refresh token inválido o expirado" });
 
-      // Generar JWT de sesión al autenticar por SMS
-      const token = JWTService.generateToken({
-        id: user.id_usuario,
-        telefono: user.telefono,
-      });
+      // ✅ Generar nuevos tokens
+      const newAccess = JWTService.generateToken({ id: id_usuario }, "15m");
+      const newRefresh = uuidv4();
 
-      // Marcar OTP como usado
-      await pool.request()
-        .input("id_token", tokenData.id_token)
-        .query("UPDATE Tokens2FA SET estado = 'Usado' WHERE id_token = @id_token");
+      // ✅ Rotar tokens
+      await RefreshModel.save(pool, id_usuario, newRefresh, 7);
 
       res.status(200).json({
-        message: "✅ Autenticación por SMS exitosa",
-        token,
+        message: "Tokens renovados correctamente",
+        accessToken: newAccess,
+        refreshToken: newRefresh,
+      });
+    } catch (err) {
+      console.error("❌ Error en refresh token:", err);
+      res.status(500).json({ error: "Error al renovar token" });
+    }
+  },
+
+
+ /**
+   * ================================================================
+   * MÉTODO LOGOUT — CIERRE TOTAL DE SESIÓN
+   * ================================================================
+   * Este método:
+   * 1️ Valida el token enviado por header (Bearer)
+   * 2️ Marca la sesión JWT como cerrada
+   * 3️ Revoca el refresh token en TokensRefresh
+   * ================================================================
+   */
+  logout: async (req, res) => {
+    try {
+      const pool = await poolPromise;
+      const authHeader = req.headers.authorization;
+      const token = authHeader && authHeader.split(" ")[1];
+      const { id_usuario } = req.body; // opcional para refrescos futuros
+
+      if (!token)
+        return res.status(400).json({ error: "Token no proporcionado" });
+
+      // ✅ Verificar que el token JWT sea válido
+      const decoded = JWTService.verifyToken(token);
+      if (!decoded)
+        return res.status(403).json({ error: "Token inválido o expirado" });
+
+      const userId = id_usuario || decoded.id;
+
+      // ✅ 1. Marcar la sesión JWT como cerrada
+      await pool.request()
+        .input("id_usuario", sql.Int, userId)
+        .query(`
+          UPDATE SesionesJWT
+          SET fecha_cierre = GETDATE()
+          WHERE id_usuario = @id_usuario AND fecha_cierre IS NULL
+        `);
+
+      // ✅ 2. Revocar el refresh token activo
+      await RefreshModel.revoke(pool, userId);
+
+      // ✅ 3. (Opcional) Limpieza de tokens 2FA expirados
+      await pool.request()
+        .input("id_usuario", sql.Int, userId)
+        .query(`
+          UPDATE Tokens2FA
+          SET estado = 'Expirado'
+          WHERE id_usuario = @id_usuario AND fecha_expiracion < GETDATE()
+        `);
+
+      // ✅ 4. Respuesta exitosa
+      res.status(200).json({
+        message: "✅ Sesión cerrada correctamente",
         user: {
-          id: user.id_usuario,
-          nombre: user.nombre,
-          telefono: user.telefono,
+          id_usuario: userId,
         },
       });
     } catch (err) {
-      console.error("❌ Error en verifySMS:", err);
-      res.status(500).json({ error: "Error al verificar OTP" });
+      console.error("❌ Error en logout:", err);
+      res.status(500).json({ error: "Error interno al cerrar sesión" });
     }
   },
+
 };
