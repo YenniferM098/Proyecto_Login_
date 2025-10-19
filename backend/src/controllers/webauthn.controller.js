@@ -234,7 +234,9 @@ export class WebAuthnController {
     }
   }
 
-  // -------------------------------
+
+
+ // -------------------------------
   // VERIFICAR AUTENTICACIÓN (LOGIN)
   // -------------------------------
   static async authVerify(req, res) {
@@ -270,20 +272,43 @@ export class WebAuthnController {
         return res.status(404).json({ error: "Usuario no encontrado" });
 
       const user = userRes.recordset[0];
+      
+      // ✅ INCLUIR TODOS LOS DATOS EN EL TOKEN
       const token = jwt.sign(
-        { id: user.id_usuario, correo: user.correo, authMethod: "biometric" },
+        { 
+          id_usuario: user.id_usuario,
+          id: user.id_usuario, // Compatibilidad
+          correo: user.correo,
+          nombre: user.nombre,
+          a_paterno: user.a_paterno,
+          a_materno: user.a_materno,
+          telefono: user.telefono,
+          metodo_autenticacion: "Biometría",
+          authMethod: "biometric"
+        },
         process.env.JWT_SECRET || "tu_secreto_jwt",
         { expiresIn: "24h" }
       );
 
+      // ✅ DEVOLVER DATOS COMPLETOS DEL USUARIO
       res.json({
         success: true,
         token,
         accessToken: token,
-        user: { nombre: user.nombre, correo: user.correo },
+        user: { 
+          id_usuario: user.id_usuario,
+          nombre: user.nombre,
+          a_paterno: user.a_paterno,
+          a_materno: user.a_materno,
+          correo: user.correo,
+          telefono: user.telefono,
+          metodo_autenticacion: "Biometría",
+          estado: user.estado || "Activo"
+        },
         message: "Autenticación biométrica exitosa",
       });
     } catch (error) {
+      console.error("❌ Error en authVerify:", error);
       res.status(500).json({ error: "Error al verificar autenticación biométrica", details: error.message });
     }
   }

@@ -144,6 +144,10 @@ register: async (req, res) => {
           id: user.id_usuario,
           nombre: user.nombre,
           correo: user.correo,
+          nombre: user.nombre,
+          a_paterno: user.a_paterno,
+          a_materno: user.a_materno,
+          telefono: user.telefono,
         },
       });
     } catch (err) {
