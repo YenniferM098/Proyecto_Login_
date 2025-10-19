@@ -12,7 +12,10 @@ router.get(
   OAuthController.success
 );
 
-router.get("/facebook", passport.authenticate("facebook", { scope: ["email"] }));
+router.get("/facebook", passport.authenticate("facebook", { 
+  scope: ["email", "public_profile"],
+  authType: 'rerequest' // Fuerza a solicitar permisos denegados anteriormente
+}));
 
 router.get(
   "/facebook/callback",
